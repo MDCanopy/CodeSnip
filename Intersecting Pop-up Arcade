@@ -1,0 +1,65 @@
+var LAYERS = [
+  { "name": "Layer Test One",   "field": "Data" },
+  { "name": "Layer Test Two",   "field": "Data" },
+  { "name": "Layer Test Three", "field": "Data" }
+];
+
+function fsByName(cfg){
+  return FeatureSetByName($map, cfg.name, [cfg.field, "OBJECTID"], true);
+}
+
+function getVal(f){
+  for (var i = 0; i < Count(LAYERS); i++) {
+    var fld = LAYERS[i].field;
+    if (HasKey(f, fld)) { return f[fld]; }
+  }
+  return null;
+}
+
+var me = $feature;
+
+var partners = [];
+for (var i = 0; i < Count(LAYERS); i++) {
+  var cfg = LAYERS[i];
+  var fs  = fsByName(cfg);
+  if (IsEmpty(fs)) { continue; }
+
+  var hits = Intersects(fs, Geometry(me));
+  for (var f in hits) {
+    var skipSelf = HasKey(f,"OBJECTID") && HasKey(me,"OBJECTID")
+                   && f.OBJECTID == me.OBJECTID
+                   && IsEmpty(SymmetricDifference(Geometry(f), Geometry(me)));
+    if (!skipSelf) { Push(partners, f); }
+  }
+}
+
+if (Count(partners) == 0) {
+  return "No overlapping partner found at this location (check layer titles/fields).";
+}
+
+var other  = partners[0];
+var bestA  = Area(Intersection(Geometry(me), Geometry(other)), "square-meters");
+for (var j = 1; j < Count(partners); j++) {
+  var g  = partners[j];
+  var ia = Area(Intersection(Geometry(me), Geometry(g)), "square-meters");
+  if (ia > bestA) { bestA = ia; other = g; }
+}
+
+var leftF  = me;
+var rightF = other;
+if (Centroid(Geometry(other)).x < Centroid(Geometry(me)).x) {
+  leftF  = other;
+  rightF = me;
+}
+
+var vLeftRaw  = DefaultValue(getVal(leftF),  0);
+var vRightRaw = DefaultValue(getVal(rightF), 0);
+
+var L = Number(vLeftRaw);
+var R = Number(vRightRaw);
+var bothNums = !IsNan(L) && !IsNan(R);
+var vMid = IIF(bothNums, L + R, Text(vLeftRaw) + " + " + Text(vRightRaw));
+
+"Polygon on left (Value A): " + Text(IIF(bothNums, L, vLeftRaw)) + "\n" +
+"Polygon in middle (A + B): " + Text(vMid) + "\n" +
+"Polygon on right (Value B): " + Text(IIF(bothNums, R, vRightRaw))
