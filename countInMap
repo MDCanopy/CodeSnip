@@ -1,0 +1,88 @@
+import arcpy
+
+MAP_NAME = None
+
+def _safe_getcount_for_layer(lyr):
+    if not lyr.supports("DATASOURCE") or lyr.isBroken:
+        return None
+    try:
+        desc = arcpy.Describe(lyr)
+        if getattr(desc, "dataType", "").lower() not in ("featurelayer", "featureclass", "shapefile"):
+            return None
+        if not hasattr(desc, "shapeType"):
+            return None
+    except Exception:
+        return None
+    def_q = lyr.definitionQuery if lyr.supports("DEFINITIONQUERY") else ""
+    tmp_name = f"in_memory\\tmp_cnt_{abs(hash(lyr.longName))}"
+    try:
+        src = lyr.dataSource
+        arcpy.management.MakeFeatureLayer(src, tmp_name, def_q if def_q else None)
+        cnt = int(arcpy.management.GetCount(tmp_name).getOutput(0))
+        return cnt
+    except Exception:
+        try:
+            cnt = int(arcpy.management.GetCount(lyr).getOutput(0))
+            return cnt
+        except Exception:
+            return None
+    finally:
+        try:
+            if arcpy.Exists(tmp_name):
+                arcpy.management.Delete(tmp_name)
+        except Exception:
+            pass
+
+def _walk_layers(layer_or_map, results, indent=0):
+    if hasattr(layer_or_map, "listLayers"):
+        for lyr in layer_or_map.listLayers():
+            if getattr(lyr, "isGroupLayer", False):
+                results.append((lyr.name, None, indent))
+                _walk_layers(lyr, results, indent + 1)
+            else:
+                try:
+                    desc = arcpy.Describe(lyr)
+                    is_feature = getattr(desc, "dataType", "").lower() in ("featurelayer", "featureclass", "shapefile")
+                except Exception:
+                    is_feature = False
+                if is_feature:
+                    cnt = _safe_getcount_for_layer(lyr)
+                    results.append((lyr.name, cnt, indent))
+
+def _get_target_map():
+    aprx = arcpy.mp.ArcGISProject("CURRENT")
+    if MAP_NAME:
+        maps = [m for m in aprx.listMaps() if m.name == MAP_NAME]
+        if not maps:
+            raise RuntimeError(f'Map named "{MAP_NAME}" not found in this project.')
+        return maps[0]
+    mv = aprx.activeView
+    if mv and getattr(mv, "type", "").upper() == "MAP":
+        return mv.map
+    maps = aprx.listMaps()
+    if not maps:
+        raise RuntimeError("No maps found in this project.")
+    return maps[0]
+
+def main():
+    m = _get_target_map()
+    rows = []
+    _walk_layers(m, rows, indent=0)
+    name_col_width = max(([len("Layer")] + [len("  " * ind + (nm or "")) for nm, _, ind in rows])) if rows else 20
+    count_col_header = "Feature Count"
+    print(f"\nMap: {m.name}\n")
+    print(f"{'Layer'.ljust(name_col_width)}  {count_col_header}")
+    print("-" * (name_col_width + 2 + len(count_col_header)))
+    grand_total = 0
+    for nm, cnt, ind in rows:
+        label = ("  " * ind) + nm
+        if cnt is None:
+            print(f"{label.ljust(name_col_width)}  {'-'}")
+        else:
+            print(f"{label.ljust(name_col_width)}  {cnt}")
+            grand_total += cnt
+    print("-" * (name_col_width + 2 + len(count_col_header)))
+    print(f"{'TOTAL'.ljust(name_col_width)}  {grand_total}\n")
+
+if __name__ == "__main__":
+    main()
